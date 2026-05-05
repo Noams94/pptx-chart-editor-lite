@@ -2,9 +2,12 @@
 
 import io
 import re
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+
+SAMPLE_PATH = Path(__file__).parent / "sample.pptx"
 
 from core.data_extractor import extract_all_charts
 from core.data_writer import update_multiple_charts
@@ -69,15 +72,26 @@ uploaded = st.file_uploader(
     label_visibility="collapsed",
 )
 
-if uploaded is not None and st.session_state.get("file_name") != uploaded.name:
-    st.session_state.pptx_bytes = uploaded.getvalue()
-    st.session_state.file_name = uploaded.name
+
+def _load_pptx(pptx_bytes: bytes, file_name: str):
+    st.session_state.pptx_bytes = pptx_bytes
+    st.session_state.file_name = file_name
     with st.spinner("טוען נתוני גרפים..."):
-        st.session_state.charts = extract_all_charts(st.session_state.pptx_bytes)
+        st.session_state.charts = extract_all_charts(pptx_bytes)
     st.session_state.sheet_map = _build_sheet_name_map(st.session_state.charts)
     st.session_state.pop("updated_bytes", None)
     st.session_state.pop("xl_export_bytes", None)
+
+
+if uploaded is not None and st.session_state.get("file_name") != uploaded.name:
+    _load_pptx(uploaded.getvalue(), uploaded.name)
     st.rerun()
+
+if "pptx_bytes" not in st.session_state and SAMPLE_PATH.exists():
+    st.caption("אין לכם מצגת בהישג יד? נסו את המצגת לדוגמה:")
+    if st.button("📂 שימוש במצגת לדוגמה", use_container_width=True):
+        _load_pptx(SAMPLE_PATH.read_bytes(), "sample.pptx")
+        st.rerun()
 
 if "pptx_bytes" not in st.session_state:
     st.info("העלו קובץ מצגת כדי להתחיל.")
