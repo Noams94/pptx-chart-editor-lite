@@ -11,6 +11,20 @@ SAMPLE_PATH = Path(__file__).parent / "sample.pptx"
 
 from core.data_extractor import extract_all_charts
 from core.data_writer import update_multiple_charts
+from core.text_extractor import extract_all_texts
+from core.text_writer import update_multiple_texts
+
+TEXTS_SHEET_NAME = "_Texts"
+TEXT_COLS = [
+    "שקופית",
+    "כותרת_שקופית",
+    "שם_צורה",
+    "מזהה_צורה",
+    "סוג",
+    "מיקום",
+    "טקסט_מקורי",
+    "טקסט_חדש",
+]
 
 
 st.set_page_config(
@@ -76,8 +90,9 @@ uploaded = st.file_uploader(
 def _load_pptx(pptx_bytes: bytes, file_name: str):
     st.session_state.pptx_bytes = pptx_bytes
     st.session_state.file_name = file_name
-    with st.spinner("טוען נתוני גרפים..."):
+    with st.spinner("טוען נתוני גרפים וטקסטים..."):
         st.session_state.charts = extract_all_charts(pptx_bytes)
+        st.session_state.texts = extract_all_texts(pptx_bytes)
     st.session_state.sheet_map = _build_sheet_name_map(st.session_state.charts)
     st.session_state.pop("updated_bytes", None)
     st.session_state.pop("xl_export_bytes", None)
@@ -98,17 +113,19 @@ if "pptx_bytes" not in st.session_state:
     st.stop()
 
 charts = st.session_state.charts
-if not charts:
-    st.warning("לא נמצאו גרפים במצגת.")
+texts = st.session_state.get("texts", [])
+if not charts and not texts:
+    st.warning("לא נמצאו גרפים או טקסטים לעריכה במצגת.")
     if st.button("התחלה מחדש"):
         _reset()
         st.rerun()
     st.stop()
 
 slides_with_charts = len({c.slide_index for c in charts})
-m1, m2 = st.columns(2)
+m1, m2, m3 = st.columns(3)
 m1.metric("שקופיות עם גרפים", slides_with_charts)
 m2.metric("סך כל הגרפים", len(charts))
+m3.metric("פריטי טקסט", len(texts))
 
 st.success(f"נטען בהצלחה: {st.session_state.file_name}")
 st.divider()
@@ -120,6 +137,23 @@ st.caption("כל גרף בגיליון נפרד. ערכו את הערכים וש
 if "xl_export_bytes" not in st.session_state:
     xl_buffer = io.BytesIO()
     with pd.ExcelWriter(xl_buffer, engine="openpyxl") as writer:
+        if texts:
+            text_rows = [
+                {
+                    "שקופית": t.slide_index + 1,
+                    "כותרת_שקופית": t.slide_title,
+                    "שם_צורה": t.shape_name,
+                    "מזהה_צורה": t.shape_id,
+                    "סוג": t.kind,
+                    "מיקום": t.location_label,
+                    "טקסט_מקורי": t.original_text,
+                    "טקסט_חדש": t.original_text,
+                }
+                for t in texts
+            ]
+            pd.DataFrame(text_rows, columns=TEXT_COLS).to_excel(
+                writer, sheet_name=TEXTS_SHEET_NAME, index=False,
+            )
         for ci in charts:
             sheet = st.session_state.sheet_map[ci.key]
             ci.dataframe.to_excel(writer, sheet_name=sheet, index=False)
@@ -153,8 +187,61 @@ if xl_file is not None:
         charts_by_key = {ci.key: ci for ci in charts}
 
         updates = []
+        text_updates = []
         skipped = []
         for sheet_name in xls.sheet_names:
+            if sheet_name == TEXTS_SHEET_NAME:
+                try:
+                    tdf = pd.read_excel(xls, sheet_name=sheet_name)
+                except Exception as e:
+                    skipped.append(f"גיליון '{sheet_name}': שגיאת קריאה ({e})")
+                    continue
+                missing = [c for c in TEXT_COLS if c not in tdf.columns]
+                if missing:
+                    skipped.append(
+                        f"גיליון '{sheet_name}': חסרות עמודות {missing}"
+                    )
+                    continue
+                texts_by_key = {
+                    (t.slide_index, int(t.shape_id), t.kind,
+                     t.paragraph_index, t.table_row, t.table_col): t
+                    for t in texts
+                }
+                for _, row in tdf.iterrows():
+                    new_val = row["טקסט_חדש"]
+                    orig_val = row["טקסט_מקורי"]
+                    if pd.isna(new_val):
+                        continue
+                    new_str = str(new_val)
+                    orig_str = "" if pd.isna(orig_val) else str(orig_val)
+                    if new_str == orig_str:
+                        continue
+                    try:
+                        slide_index = int(row["שקופית"]) - 1
+                        shape_id = int(row["מזהה_צורה"])
+                    except (ValueError, TypeError):
+                        continue
+                    kind = str(row["סוג"])
+                    # Match back to TextInfo by location string to recover
+                    # paragraph_index/table coordinates.
+                    matched = None
+                    for t in texts:
+                        if (t.slide_index == slide_index and t.shape_id == shape_id
+                                and t.kind == kind and t.location_label == str(row["מיקום"])):
+                            matched = t
+                            break
+                    if matched is None:
+                        skipped.append(
+                            f"טקסט בשקופית {slide_index + 1} ({kind}): לא נמצאה התאמה"
+                        )
+                        continue
+                    text_updates.append((
+                        matched.slide_index, matched.shape_id, matched.shape_name,
+                        matched.kind, matched.paragraph_index,
+                        matched.table_row, matched.table_col, new_str,
+                    ))
+                continue
+
             chart_key = sheet_to_chart.get(sheet_name)
             if chart_key and chart_key in charts_by_key:
                 ci = charts_by_key[chart_key]
@@ -186,15 +273,22 @@ if xl_file is not None:
                 for msg in skipped:
                     st.warning(msg)
 
-        if updates:
-            st.info(f"מוכנים לעדכון {len(updates)} גרפים.")
+        if updates or text_updates:
+            parts = []
+            if updates:
+                parts.append(f"{len(updates)} גרפים")
+            if text_updates:
+                parts.append(f"{len(text_updates)} טקסטים")
+            st.info("מוכנים לעדכון " + " ו-".join(parts) + ".")
             if st.button("✏️ החלת השינויים על המצגת", type="primary", use_container_width=True):
-                with st.spinner(f"מעדכן {len(updates)} גרפים..."):
-                    updated_bytes = update_multiple_charts(
-                        st.session_state.pptx_bytes, updates,
-                    )
-                    st.session_state.updated_bytes = updated_bytes
-                    st.success(f"עודכנו {len(updates)} גרפים.")
+                with st.spinner("מעדכן את המצגת..."):
+                    current_bytes = st.session_state.pptx_bytes
+                    if updates:
+                        current_bytes = update_multiple_charts(current_bytes, updates)
+                    if text_updates:
+                        current_bytes = update_multiple_texts(current_bytes, text_updates)
+                    st.session_state.updated_bytes = current_bytes
+                    st.success("עודכנו " + " ו-".join(parts) + ".")
                     st.rerun()
         elif not skipped:
             st.error("לא נמצאו גיליונות תואמים בקובץ האקסל.")
