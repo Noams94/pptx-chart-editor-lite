@@ -1,4 +1,4 @@
-"""PPTX Chart Editor Lite — עריכת כל הגרפים במצגת דרך אקסל בלבד."""
+"""PPTX Chart Editor Lite — עריכת כל הגרפים והטקסטים במצגת דרך אקסל בלבד."""
 
 import io
 import re
@@ -28,7 +28,7 @@ TEXT_COLS = [
 
 
 st.set_page_config(
-    page_title="עורך גרפים למצגות",
+    page_title="עורך גרפים וטקסטים למצגות",
     page_icon="📊",
     layout="centered",
 )
@@ -73,7 +73,7 @@ def _reset():
         del st.session_state[key]
 
 
-st.title("📊 עורך גרפים למצגות")
+st.title("📊 עורך גרפים וטקסטים למצגות")
 st.caption("העלאת מצגת ← הורדת אקסל ← עריכת הנתונים ← העלאת אקסל מתוקן ← הורדת מצגת מעודכנת")
 
 with st.expander("📖 מדריך שימוש"):
@@ -157,7 +157,7 @@ st.divider()
 
 # === שלב 2: הורדת אקסל ===
 st.subheader("2. הורדת קובץ אקסל לעריכה")
-st.caption("כל גרף בגיליון נפרד. ערכו את הערכים ושמרו את הקובץ.")
+st.caption("גיליון נפרד לכל גרף, וגיליון `_Texts` לכל הטקסטים. ערכו ושמרו את הקובץ.")
 
 if "xl_export_bytes" not in st.session_state:
     xl_buffer = io.BytesIO()
