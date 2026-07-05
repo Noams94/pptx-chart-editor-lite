@@ -24,6 +24,19 @@ XY_CHART_TYPES = {
 CATEGORY_LABEL = "קטגוריה"
 
 
+def _extract_xy_x_values(series, n: int) -> list:
+    """X values for an XY (scatter) series.
+
+    python-pptx only exposes Y values publicly (series.values reads c:yVal),
+    so read c:xVal from the series XML directly. When the series has no
+    explicit X values, PowerPoint plots against the point index — mirror that.
+    """
+    xVal = series._element.xVal
+    if xVal is None:
+        return list(range(1, n + 1))
+    return [xVal.pt_v(idx) for idx in range(xVal.ptCount_val)]
+
+
 def is_percentage_format(fmt: str) -> bool:
     if not fmt:
         return False
@@ -84,10 +97,14 @@ def _extract_chart_data(chart: Chart):
     if is_xy:
         data = {}
         for i, series in enumerate(series_list):
-            x_vals = list(series.values)
             y_vals = list(series.values)
+            x_vals = _extract_xy_x_values(series, len(y_vals))
             data[f"X_{series_names[i]}"] = x_vals
             data[f"Y_{series_names[i]}"] = y_vals
+        # Series may have different point counts — pad so DataFrame accepts them
+        max_len = max((len(v) for v in data.values()), default=0)
+        for col, vals in data.items():
+            data[col] = vals + [None] * (max_len - len(vals))
         display_df = pd.DataFrame(data)
     else:
         try:
